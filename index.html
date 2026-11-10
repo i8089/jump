@@ -126,8 +126,10 @@ body {
 .count {
   font-family: var(--font-display);
   font-weight: 900;
-  font-size: clamp(8rem, 52vw, 19rem);
+  --chars: 4;
+  font-size: clamp(4rem, min(52vw, calc(208vw / var(--chars))), min(19rem, calc(76rem / var(--chars))));
   line-height: .86;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
   letter-spacing: -.01em;
   margin-left: -.04em;
@@ -535,6 +537,17 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     s = Math.max(0, Math.ceil(s));
     return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
   }
+  function setCount(v) {
+    var txt = String(v);
+    if (countEl.textContent === txt) return;
+    countEl.textContent = txt;
+    // The CSS drops the size by glyph count, which lands within a side bearing
+    // or two; measure once per change and trim off whatever is still hanging out.
+    countEl.style.setProperty('--chars', txt.length);
+    for (var i = 1; i <= 6 && countEl.scrollWidth > countEl.clientWidth; i++) {
+      countEl.style.setProperty('--chars', (txt.length + i * 0.1).toFixed(1));
+    }
+  }
   function dur(s) { return s >= 60 && s % 60 === 0 ? (s / 60) + ' min' : s + ' s'; }
   function rounds(n) { return n + (n === 1 ? ' round' : ' rounds'); }
   function lockScreenOn() {
@@ -563,7 +576,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     if (state === 'idle') {
       body.dataset.phase = 'idle';
       phaseEl.textContent = 'Ready';
-      countEl.textContent = fmt(WORKOUT);
+      setCount(fmt(WORKOUT));
       hintEl.textContent = cfg.rounds === 1 ? dur(cfg.opener) + ' jump, single round.'
         : dur(cfg.opener) + ' jump, then ' + cfg.rest + ' s rest / ' + cfg.work + ' s jump.';
       roundEl.textContent = rounds(cfg.rounds);
@@ -572,7 +585,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     } else if (state === 'done') {
       body.dataset.phase = 'done';
       phaseEl.textContent = 'Done';
-      countEl.textContent = fmt(WORKOUT);
+      setCount(fmt(WORKOUT));
       hintEl.textContent = rounds(cfg.rounds) + ' finished. Enjoy your meal.';
       roundEl.textContent = cfg.rounds + ' / ' + cfg.rounds;
       goBtn.textContent = 'Again';
@@ -582,14 +595,14 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
       if (leftLead <= 0) { play(); return; }
       body.dataset.phase = 'idle';
       phaseEl.textContent = 'Get ready';
-      countEl.textContent = Math.max(1, Math.ceil(leftLead));
+      setCount(Math.max(1, Math.ceil(leftLead)));
       hintEl.textContent = 'Picking up where you stopped.';
       roundEl.textContent = 'Round ' + (cur.r + 1) + ' / ' + cfg.rounds;
       goBtn.textContent = 'Pause';
       resetBtn.hidden = false;
     } else {
       body.dataset.phase = cur.k === 'ready' ? 'idle' : cur.k;
-      countEl.textContent = Math.max(1, Math.ceil(cur.e - t));
+      setCount(Math.max(1, Math.ceil(cur.e - t)));
       if (state === 'paused') {
         phaseEl.textContent = (cur.k === 'ready' ? 'Get ready' : cur.k === 'jump' ? 'Jump' : 'Rest') + ' · paused';
         hintEl.textContent = 'Tap anywhere to resume. Three seconds to get set.';
@@ -792,6 +805,14 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   build();
   render();
   syncSheet();
+
+  try {
+    document.fonts.ready.then(function () {
+      var t = countEl.textContent;
+      countEl.textContent = '';
+      setCount(t);
+    });
+  } catch (e) {}
 
   if ('serviceWorker' in navigator) {
     try { navigator.serviceWorker.register('sw.js').catch(function () {}); } catch (e) {}
