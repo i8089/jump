@@ -448,9 +448,9 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     groups.forEach(function (g) { g.style.flex = g._w; });
   }
 
-  // ---- Sound. The whole session is rendered into one WAV and played through
-  // an <audio> element. Media playback ignores the iPhone silent switch,
-  // where Web Audio beeps are muted by it.
+  // ---- Sound. The whole session is rendered into one buffer and played through
+  // Web Audio. Unlike an <audio> element, this doesn't put a "Now Playing" media
+  // player on the iPhone lock screen, Control Center or Dynamic Island.
   var RATE = 16000;
 
   function tone(buf, at, freq, dur, vol) {
@@ -470,23 +470,33 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   function rising(buf, at) { tone(buf, at, 880, 0.14, 0.5); tone(buf, at + 0.16, 1320, 0.45, 0.5); }
   function falling(buf, at) { tone(buf, at, 660, 0.14, 0.5); tone(buf, at + 0.16, 330, 0.5, 0.5); }
 
-  function wavUrl(f32) {
-    var n = f32.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
-    function str(o, s) { for (var k = 0; k < s.length; k++) v.setUint8(o + k, s.charCodeAt(k)); }
-    str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE');
-    str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-    v.setUint32(24, RATE, true); v.setUint32(28, RATE * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-    str(36, 'data'); v.setUint32(40, n * 2, true);
-    for (var k = 0, o = 44; k < n; k++, o += 2) {
-      var s = Math.max(-1, Math.min(1, f32[k]));
-      v.setInt16(o, s * 32767, true);
-    }
-    return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
-  }
+  // Newer iOS Safari: play as media, so the silent switch doesn't mute the beeps.
+  // Set before the AudioContext is made.
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
 
-  var audio = new Audio(), curUrl = null;
-  audio.preload = 'auto';
-  audio.setAttribute('playsinline', '');
+  var AC = window.AudioContext || window.webkitAudioContext;
+  var ctx = null, mainBuf = null, leadBuf = null, src = null, leadSrc = null;
+  var pos = 0, base = 0;     // session position while stopped / clock offset while playing
+  var pending = null;        // samples waiting for the context to exist
+
+  function toBuffer(f32) {
+    var b = ctx.createBuffer(1, f32.length, RATE);
+    if (b.copyToChannel) b.copyToChannel(f32, 0); else b.getChannelData(0).set(f32);
+    return b;
+  }
+  // Must run inside a tap: iOS only lets audio start from a user gesture.
+  function ensureCtx() {
+    if (!ctx) {
+      ctx = new AC();
+      var s = new Float32Array(Math.ceil(3.3 * RATE));
+      ticks(s, LEAD, 660, 0.35);
+      leadBuf = toBuffer(s);
+    }
+    if (ctx.state !== 'running') { var r = ctx.resume(); if (r && r.catch) r.catch(function () {}); }
+    if (pending) { mainBuf = toBuffer(pending); pending = null; }
+  }
+  function stopSrc(n) { if (n) { n.onended = null; try { n.stop(); } catch (e) {} } }
+  function now() { return state === 'running' && ctx ? Math.min(END, ctx.currentTime - base) : pos; }
 
   // Rendering a ten-minute session is tens of megabytes, so it happens once per
   // Start rather than on every tap of a stepper.
@@ -512,24 +522,8 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
         ticks(samples, p.e, 660, 0.35);
       }
     });
-    var url = wavUrl(samples);
-    if (curUrl) URL.revokeObjectURL(curUrl);
-    curUrl = url;
-    audio.src = url;
+    pending = samples;
   }
-
-  // A separate 3-2-1 clip for resuming, so the main track keeps its position.
-  var leadAudio = new Audio();
-  leadAudio.preload = 'auto';
-  leadAudio.setAttribute('playsinline', '');
-  (function () {
-    var s = new Float32Array(Math.ceil(3.3 * RATE));
-    ticks(s, LEAD, 660, 0.35);
-    leadAudio.src = wavUrl(s);
-  })();
-
-  // Newer iOS Safari: tell the system this page plays media, not alerts.
-  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
 
   var state = 'idle', raf = 0, wake = null, leadStart = 0;
 
@@ -564,7 +558,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   var themeColors = { idle: '#15181d', rest: '#0e2c4a', jump: '#ff5a1f', done: '#12382a' };
 
   function render() {
-    var t = state === 'idle' ? 0 : Math.min(END, audio.currentTime);
+    var t = state === 'idle' ? 0 : now();
     if (state === 'running' && t >= END) finish();
 
     var cur = phases[phases.length - 1];
@@ -645,20 +639,27 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
   function play() {
     ensureAudio();
-    var p = audio.play();
+    ensureCtx();
+    stopSrc(leadSrc); leadSrc = null;
+    stopSrc(src);
+    src = ctx.createBufferSource();
+    src.buffer = mainBuf;
+    src.connect(ctx.destination);
+    var me = src;
+    src.onended = function () {
+      if (src === me && state === 'running') { finish(); render(); }
+    };
+    src.start(0, Math.min(pos, mainBuf.duration));
+    base = ctx.currentTime - pos;
     state = 'running';
     lockScreenOn();
     cancelAnimationFrame(raf);
     render();
-    if (p && p.catch) p.catch(function () {
-      state = 'paused';
-      render();
-      hintEl.textContent = 'Sound was blocked. Tap Resume to try again.';
-    });
   }
 
   function pause() {
-    audio.pause();
+    pos = now();
+    stopSrc(src); src = null;
     state = 'paused';
     cancelAnimationFrame(raf);
     lockScreenOff();
@@ -670,15 +671,18 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   function startLeadIn() {
     state = 'leadin';
     leadStart = performance.now();
-    try { leadAudio.currentTime = 0; } catch (e) {}
-    var p = leadAudio.play();
-    if (p && p.catch) p.catch(function () {});
+    ensureCtx();
+    stopSrc(leadSrc);
+    leadSrc = ctx.createBufferSource();
+    leadSrc.buffer = leadBuf;
+    leadSrc.connect(ctx.destination);
+    leadSrc.start(0);
     lockScreenOn();
     cancelAnimationFrame(raf);
     render();
   }
   function cancelLeadIn() {
-    leadAudio.pause();
+    stopSrc(leadSrc); leadSrc = null;
     state = 'paused';
     cancelAnimationFrame(raf);
     lockScreenOff();
@@ -688,7 +692,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   function toggle() {
     if (!sheet.hidden) return;
     if (state === 'idle' || state === 'done') {
-      try { audio.currentTime = 0; } catch (e) {}
+      pos = 0;
       play();
     } else if (state === 'running') {
       pause();
@@ -700,9 +704,9 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   }
 
   function toIdle() {
-    audio.pause();
-    leadAudio.pause();
-    try { audio.currentTime = 0; } catch (e) {}
+    stopSrc(src); src = null;
+    stopSrc(leadSrc); leadSrc = null;
+    pos = 0;
     cancelAnimationFrame(raf);
     lockScreenOff();
     state = 'idle';
@@ -718,10 +722,6 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     if (state === 'idle' || state === 'done') return;
     if (e.target.closest && e.target.closest('button, .sheet')) return;
     toggle();
-  });
-
-  audio.addEventListener('ended', function () {
-    if (state === 'running') { finish(); render(); }
   });
 
   document.addEventListener('keydown', function (e) {
