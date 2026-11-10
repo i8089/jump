@@ -83,7 +83,7 @@ body {
 .top {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   font-size: .95rem;
   letter-spacing: .08em;
@@ -92,6 +92,20 @@ body {
   font-weight: 600;
 }
 .top .round { font-variant-numeric: tabular-nums; color: var(--ink); }
+.top .tools { display: flex; align-items: center; gap: 10px; }
+#gear {
+  min-height: 44px;
+  width: 44px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 12px;
+  font-size: 1rem;
+}
+#gear[hidden] { display: none; }
 
 .stage {
   flex: 1;
@@ -150,6 +164,25 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.presets { display: flex; gap: 8px; }
+.presets[hidden] { display: none; }
+.presets button {
+  flex: 1;
+  min-height: 48px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: .06em;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--ink);
+  box-shadow: inset 0 0 0 2px var(--track);
+}
+.presets button[aria-pressed="true"] {
+  background: var(--track);
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+
 .controls { display: flex; gap: 12px; }
 button {
   font: inherit;
@@ -179,13 +212,93 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   font-size: 1.2rem;
 }
 #reset[hidden] { display: none; }
+
+/* Settings sheet. Fixed dark colours: it only opens from the idle screen, and it
+   should not change shade underneath the phase transition. */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: rgba(0, 0, 0, .62);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.sheet[hidden] { display: none; }
+.sheetcard {
+  width: 100%;
+  max-width: 560px;
+  background: #1d2128;
+  color: #f2eee6;
+  border-radius: 22px 22px 0 0;
+  padding: 22px calc(20px + env(safe-area-inset-right)) calc(22px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left));
+  max-height: 92%;
+  overflow-y: auto;
+}
+.sheetcard h2 {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 2.1rem;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(242, 238, 230, .1);
+}
+.row .lab { font-size: 1.05rem; }
+.row .val {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.2rem;
+  font-weight: 600;
+  min-width: 72px;
+  text-align: right;
+}
+.step { display: flex; gap: 8px; }
+.step button {
+  min-height: 44px;
+  width: 44px;
+  padding: 0;
+  font-family: var(--font-body);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1;
+  border-radius: 12px;
+  background: rgba(242, 238, 230, .1);
+  color: #f2eee6;
+}
+.step button:disabled { opacity: .35; cursor: default; }
+.total {
+  padding: 14px 0 0;
+  color: rgba(242, 238, 230, .62);
+  font-size: .95rem;
+  font-variant-numeric: tabular-nums;
+}
+.sheetfoot { display: flex; gap: 12px; margin-top: 16px; }
+.sheetfoot button { flex: 1; min-height: 58px; font-size: 1.3rem; border-radius: 16px; }
+#sdone { background: #f2eee6; color: #15181d; }
+#sreset { background: transparent; color: #f2eee6; box-shadow: inset 0 0 0 2px rgba(242, 238, 230, .25); }
 </style>
 </head>
 <body data-phase="idle">
 <main class="app">
   <div class="top">
     <span>Jump rope</span>
-    <span class="round" id="round">5 rounds</span>
+    <span class="tools">
+      <span class="round" id="round">5 rounds</span>
+      <button id="gear" type="button" aria-label="Workout settings">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 8h16M4 16h16"></path>
+          <circle cx="9" cy="8" r="2.6" fill="var(--bg)"></circle>
+          <circle cx="15" cy="16" r="2.6" fill="var(--bg)"></circle>
+        </svg>
+      </button>
+    </span>
   </div>
 
   <div class="stage">
@@ -200,6 +313,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
       <span id="elapsed">0:00</span>
       <span id="left">5:00 left</span>
     </div>
+    <div class="presets" id="presets"></div>
     <div class="controls">
       <button id="go" type="button">Start</button>
       <button id="reset" type="button" hidden>Reset</button>
@@ -207,50 +321,137 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   </div>
 </main>
 
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-label="Workout settings" hidden>
+  <div class="sheetcard">
+    <h2>Workout</h2>
+    <div class="row">
+      <span class="lab">Rounds</span>
+      <span class="val" id="v-rounds">5</span>
+      <span class="step">
+        <button type="button" data-k="rounds" data-d="-1" aria-label="Fewer rounds">&minus;</button>
+        <button type="button" data-k="rounds" data-d="1" aria-label="More rounds">+</button>
+      </span>
+    </div>
+    <div class="row">
+      <span class="lab">First jump</span>
+      <span class="val" id="v-opener">60 s</span>
+      <span class="step">
+        <button type="button" data-k="opener" data-d="-1" aria-label="Shorter first jump">&minus;</button>
+        <button type="button" data-k="opener" data-d="1" aria-label="Longer first jump">+</button>
+      </span>
+    </div>
+    <div class="row">
+      <span class="lab">Jump</span>
+      <span class="val" id="v-work">45 s</span>
+      <span class="step">
+        <button type="button" data-k="work" data-d="-1" aria-label="Shorter jump">&minus;</button>
+        <button type="button" data-k="work" data-d="1" aria-label="Longer jump">+</button>
+      </span>
+    </div>
+    <div class="row">
+      <span class="lab">Rest</span>
+      <span class="val" id="v-rest">15 s</span>
+      <span class="step">
+        <button type="button" data-k="rest" data-d="-1" aria-label="Shorter rest">&minus;</button>
+        <button type="button" data-k="rest" data-d="1" aria-label="Longer rest">+</button>
+      </span>
+    </div>
+    <p class="total" id="total">Total 5:00</p>
+    <div class="sheetfoot">
+      <button id="sreset" type="button">Default</button>
+      <button id="sdone" type="button">Done</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function () {
-  var WORK = 45, REST = 15, ROUNDS = 5, LEAD = 3;
-
-  // Timeline: 3 s get-ready countdown, then jump/rest, ending on the last jump.
-  var phases = [{ k: 'ready', d: LEAD, r: -1 }];
-  for (var i = 0; i < ROUNDS; i++) {
-    phases.push({ k: 'jump', d: i === 0 ? 60 : WORK, r: i });
-    if (i < ROUNDS - 1) phases.push({ k: 'rest', d: REST, r: i });
-  }
-  var acc = 0;
-  phases.forEach(function (p) { p.s = acc; acc += p.d; p.e = acc; });
-  var END = acc;                 // includes lead-in
-  var WORKOUT = END - LEAD;      // 4:45
+  var LEAD = 3;
+  var DEFAULTS = { rounds: 5, opener: 60, work: 45, rest: 15 };
+  // key: [min, max, step]
+  var LIMITS = { rounds: [1, 20, 1], opener: [10, 180, 5], work: [10, 180, 5], rest: [5, 120, 5] };
+  var PRESETS = [
+    { label: '3 min', cfg: { rounds: 3, opener: 60, work: 45, rest: 15 } },
+    { label: 'Standard', cfg: { rounds: 5, opener: 60, work: 45, rest: 15 } },
+    { label: '10 min', cfg: { rounds: 10, opener: 60, work: 45, rest: 15 } }
+  ];
+  var STORE = 'jump.cfg.v1';
 
   var body = document.body;
   var $ = function (id) { return document.getElementById(id); };
   var phaseEl = $('phase'), countEl = $('count'), hintEl = $('hint'),
       roundEl = $('round'), elapsedEl = $('elapsed'), leftEl = $('left'),
-      goBtn = $('go'), resetBtn = $('reset'), roundsEl = $('rounds');
+      goBtn = $('go'), resetBtn = $('reset'), roundsEl = $('rounds'),
+      gearBtn = $('gear'), presetsEl = $('presets'), sheet = $('sheet'),
+      totalEl = $('total');
+
+  // ---- Settings
+
+  function clampVal(k, v) {
+    var L = LIMITS[k], n = Number(v);
+    if (!isFinite(n)) return DEFAULTS[k];
+    n = Math.round(n / L[2]) * L[2];
+    return Math.min(L[1], Math.max(L[0], n));
+  }
+  function loadCfg() {
+    var out = { rounds: DEFAULTS.rounds, opener: DEFAULTS.opener, work: DEFAULTS.work, rest: DEFAULTS.rest };
+    try {
+      var raw = localStorage.getItem(STORE);
+      if (raw) {
+        var o = JSON.parse(raw);
+        for (var k in out) { if (o && o[k] != null) out[k] = clampVal(k, o[k]); }
+      }
+    } catch (e) {}
+    return out;
+  }
+  function saveCfg() {
+    try { localStorage.setItem(STORE, JSON.stringify(cfg)); } catch (e) {}
+  }
+  var cfg = loadCfg();
+
+  // ---- Timeline, rebuilt whenever the settings change
+
+  var phases = [], END = 0, WORKOUT = 0, audioDirty = true;
+
+  function build() {
+    phases = [{ k: 'ready', d: LEAD, r: -1 }];
+    for (var i = 0; i < cfg.rounds; i++) {
+      phases.push({ k: 'jump', d: i === 0 ? cfg.opener : cfg.work, r: i });
+      if (i < cfg.rounds - 1) phases.push({ k: 'rest', d: cfg.rest, r: i });
+    }
+    var acc = 0;
+    phases.forEach(function (p) { p.s = acc; acc += p.d; p.e = acc; });
+    END = acc;                 // includes lead-in
+    WORKOUT = END - LEAD;
+    buildBars();
+    audioDirty = true;         // the sound is re-rendered on the next Start
+  }
 
   // Progress bar: one group per round, jump | rest
-  var groups = [];
-  phases.forEach(function (p) {
-    if (p.r < 0) return;
-    if (!groups[p.r]) {
-      var g = document.createElement('div'); g.className = 'r';
-      roundsEl.appendChild(g); groups[p.r] = g; g._w = 0;
-    }
-    var s = document.createElement('div'); s.className = 'seg';
-    s.style.flex = p.d;
-    var f = document.createElement('i'); s.appendChild(f);
-    groups[p.r].appendChild(s); groups[p.r]._w += p.d;
-    p.fill = f;
-  });
-  groups.forEach(function (g) { g.style.flex = g._w; });
+  function buildBars() {
+    roundsEl.textContent = '';
+    var groups = [];
+    phases.forEach(function (p) {
+      if (p.r < 0) return;
+      if (!groups[p.r]) {
+        var g = document.createElement('div'); g.className = 'r';
+        roundsEl.appendChild(g); groups[p.r] = g; g._w = 0;
+      }
+      var s = document.createElement('div'); s.className = 'seg';
+      s.style.flex = p.d;
+      var f = document.createElement('i'); s.appendChild(f);
+      groups[p.r].appendChild(s); groups[p.r]._w += p.d;
+      p.fill = f;
+    });
+    groups.forEach(function (g) { g.style.flex = g._w; });
+  }
 
   // ---- Sound. The whole session is rendered into one WAV and played through
   // an <audio> element. Media playback ignores the iPhone silent switch,
   // where Web Audio beeps are muted by it.
   var RATE = 16000;
-  var samples = new Float32Array(Math.ceil((END + 2) * RATE));
 
-  function tone(at, freq, dur, vol) {
+  function tone(buf, at, freq, dur, vol) {
     var a = Math.floor(at * RATE), n = Math.floor(dur * RATE);
     var att = Math.floor(0.008 * RATE), rel = Math.floor(0.04 * RATE);
     for (var j = 0; j < n; j++) {
@@ -258,33 +459,14 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
       var ph = (j * freq / RATE) % 1;
       // softened square: square plus a little sine, loud and clear on phone speakers
       var v = (ph < 0.5 ? 1 : -1) * 0.75 + Math.sin(2 * Math.PI * ph) * 0.25;
-      samples[a + j] += v * vol * env;
+      buf[a + j] += v * vol * env;
     }
   }
-  function ticks(before, freq, vol) {
-    [3, 2, 1].forEach(function (n) { tone(before - n, freq, 0.09, vol); });
+  function ticks(buf, before, freq, vol) {
+    [3, 2, 1].forEach(function (n) { tone(buf, before - n, freq, 0.09, vol); });
   }
-  function rising(at) { tone(at, 880, 0.14, 0.5); tone(at + 0.16, 1320, 0.45, 0.5); }
-  function falling(at) { tone(at, 660, 0.14, 0.5); tone(at + 0.16, 330, 0.5, 0.5); }
-
-  phases.forEach(function (p, idx) {
-    if (p.k === 'ready') {
-      ticks(p.e, 660, 0.35);
-    } else if (p.k === 'jump') {
-      rising(p.s);
-      if (idx === phases.length - 1) {
-        ticks(p.e, 440, 0.3);
-        [523, 659, 784, 1047].forEach(function (f, k) {
-          tone(p.e + k * 0.17, f, k === 3 ? 0.6 : 0.15, 0.45);
-        });
-      } else {
-        ticks(p.e, 440, 0.3);
-      }
-    } else if (p.k === 'rest') {
-      falling(p.s);
-      ticks(p.e, 660, 0.35);
-    }
-  });
+  function rising(buf, at) { tone(buf, at, 880, 0.14, 0.5); tone(buf, at + 0.16, 1320, 0.45, 0.5); }
+  function falling(buf, at) { tone(buf, at, 660, 0.14, 0.5); tone(buf, at + 0.16, 330, 0.5, 0.5); }
 
   function wavUrl(f32) {
     var n = f32.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
@@ -300,21 +482,61 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
   }
 
-  var audio = new Audio();
+  var audio = new Audio(), curUrl = null;
   audio.preload = 'auto';
   audio.setAttribute('playsinline', '');
-  audio.src = wavUrl(samples);
-  samples = null;
+
+  // Rendering a ten-minute session is tens of megabytes, so it happens once per
+  // Start rather than on every tap of a stepper.
+  function ensureAudio() {
+    if (!audioDirty) return;
+    audioDirty = false;
+    var samples = new Float32Array(Math.ceil((END + 2) * RATE));
+    phases.forEach(function (p, idx) {
+      if (p.k === 'ready') {
+        ticks(samples, p.e, 660, 0.35);
+      } else if (p.k === 'jump') {
+        rising(samples, p.s);
+        if (idx === phases.length - 1) {
+          ticks(samples, p.e, 440, 0.3);
+          [523, 659, 784, 1047].forEach(function (f, k) {
+            tone(samples, p.e + k * 0.17, f, k === 3 ? 0.6 : 0.15, 0.45);
+          });
+        } else {
+          ticks(samples, p.e, 440, 0.3);
+        }
+      } else if (p.k === 'rest') {
+        falling(samples, p.s);
+        ticks(samples, p.e, 660, 0.35);
+      }
+    });
+    var url = wavUrl(samples);
+    if (curUrl) URL.revokeObjectURL(curUrl);
+    curUrl = url;
+    audio.src = url;
+  }
+
+  // A separate 3-2-1 clip for resuming, so the main track keeps its position.
+  var leadAudio = new Audio();
+  leadAudio.preload = 'auto';
+  leadAudio.setAttribute('playsinline', '');
+  (function () {
+    var s = new Float32Array(Math.ceil(3.3 * RATE));
+    ticks(s, LEAD, 660, 0.35);
+    leadAudio.src = wavUrl(s);
+  })();
 
   // Newer iOS Safari: tell the system this page plays media, not alerts.
   try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
 
-  var state = 'idle', raf = 0, wake = null;
+  var state = 'idle', raf = 0, wake = null, leadStart = 0;
 
   function fmt(s) {
     s = Math.max(0, Math.ceil(s));
     return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
   }
+  function dur(s) { return s >= 60 && s % 60 === 0 ? (s / 60) + ' min' : s + ' s'; }
+  function rounds(n) { return n + (n === 1 ? ' round' : ' rounds'); }
   function lockScreenOn() {
     try {
       if (navigator.wakeLock) navigator.wakeLock.request('screen').then(function (w) { wake = w; }).catch(function () {});
@@ -327,48 +549,66 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
   var themeMeta = document.getElementById('theme');
   var themeColors = { idle: '#15181d', rest: '#0e2c4a', jump: '#ff5a1f', done: '#12382a' };
+
   function render() {
     var t = state === 'idle' ? 0 : Math.min(END, audio.currentTime);
-    if (state !== 'idle' && state !== 'done' && t >= END) finish();
+    if (state === 'running' && t >= END) finish();
 
     var cur = phases[phases.length - 1];
     for (var i = 0; i < phases.length; i++) {
       if (t < phases[i].e) { cur = phases[i]; break; }
     }
-    var paused = state === 'paused' ? ' · paused' : '';
+    var busy = state !== 'idle' && state !== 'done';
 
     if (state === 'idle') {
       body.dataset.phase = 'idle';
       phaseEl.textContent = 'Ready';
       countEl.textContent = fmt(WORKOUT);
-      hintEl.textContent = '1 min jump, then 15 s rest / 45 s jump.';
-      roundEl.textContent = ROUNDS + ' rounds';
+      hintEl.textContent = cfg.rounds === 1 ? dur(cfg.opener) + ' jump, single round.'
+        : dur(cfg.opener) + ' jump, then ' + cfg.rest + ' s rest / ' + cfg.work + ' s jump.';
+      roundEl.textContent = rounds(cfg.rounds);
       goBtn.textContent = 'Start';
       resetBtn.hidden = true;
     } else if (state === 'done') {
       body.dataset.phase = 'done';
       phaseEl.textContent = 'Done';
       countEl.textContent = fmt(WORKOUT);
-      hintEl.textContent = 'Five rounds finished. Enjoy your meal.';
-      roundEl.textContent = ROUNDS + ' / ' + ROUNDS;
+      hintEl.textContent = rounds(cfg.rounds) + ' finished. Enjoy your meal.';
+      roundEl.textContent = cfg.rounds + ' / ' + cfg.rounds;
       goBtn.textContent = 'Again';
       resetBtn.hidden = true;
+    } else if (state === 'leadin') {
+      var leftLead = LEAD - (performance.now() - leadStart) / 1000;
+      if (leftLead <= 0) { play(); return; }
+      body.dataset.phase = 'idle';
+      phaseEl.textContent = 'Get ready';
+      countEl.textContent = Math.max(1, Math.ceil(leftLead));
+      hintEl.textContent = 'Picking up where you stopped.';
+      roundEl.textContent = 'Round ' + (cur.r + 1) + ' / ' + cfg.rounds;
+      goBtn.textContent = 'Pause';
+      resetBtn.hidden = false;
     } else {
       body.dataset.phase = cur.k === 'ready' ? 'idle' : cur.k;
       countEl.textContent = Math.max(1, Math.ceil(cur.e - t));
-      if (cur.k === 'ready') {
-        phaseEl.textContent = 'Get ready' + paused;
+      if (state === 'paused') {
+        phaseEl.textContent = (cur.k === 'ready' ? 'Get ready' : cur.k === 'jump' ? 'Jump' : 'Rest') + ' · paused';
+        hintEl.textContent = 'Tap anywhere to resume. Three seconds to get set.';
+      } else if (cur.k === 'ready') {
+        phaseEl.textContent = 'Get ready';
         hintEl.textContent = 'Grab the rope. Jump on the rising tone.';
-        roundEl.textContent = 'Round 1 / ' + ROUNDS;
       } else {
-        phaseEl.textContent = (cur.k === 'jump' ? 'Jump' : 'Rest') + paused;
+        phaseEl.textContent = cur.k === 'jump' ? 'Jump' : 'Rest';
         hintEl.textContent = cur.k === 'rest' ? 'Next jump starts on the rising tone.'
-          : (cur.r === ROUNDS - 1 ? 'Last round.' : 'Rest starts on the falling tone.');
-        roundEl.textContent = 'Round ' + (cur.r + 1) + ' / ' + ROUNDS;
+          : (cur.r === cfg.rounds - 1 ? 'Last round.' : 'Tap anywhere to pause.');
       }
+      roundEl.textContent = cur.k === 'ready' ? 'Round 1 / ' + cfg.rounds
+        : 'Round ' + (cur.r + 1) + ' / ' + cfg.rounds;
       goBtn.textContent = state === 'paused' ? 'Resume' : 'Pause';
       resetBtn.hidden = false;
     }
+
+    gearBtn.hidden = busy;
+    presetsEl.hidden = busy;
 
     phases.forEach(function (p) {
       if (!p.fill) return;
@@ -381,7 +621,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
     var tc = themeColors[body.dataset.phase] || themeColors.idle;
     if (themeMeta.content !== tc) themeMeta.content = tc;
-    if (state === 'running') raf = requestAnimationFrame(render);
+    if (state === 'running' || state === 'leadin') raf = requestAnimationFrame(render);
   }
 
   function finish() {
@@ -391,6 +631,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   }
 
   function play() {
+    ensureAudio();
     var p = audio.play();
     state = 'running';
     lockScreenOn();
@@ -403,28 +644,67 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     });
   }
 
-  goBtn.addEventListener('click', function () {
+  function pause() {
+    audio.pause();
+    state = 'paused';
+    cancelAnimationFrame(raf);
+    lockScreenOff();
+    render();
+  }
+
+  // Resuming drops you back into a jump mid-phase, so give it the same
+  // three-second countdown the start has. The main track stays parked.
+  function startLeadIn() {
+    state = 'leadin';
+    leadStart = performance.now();
+    try { leadAudio.currentTime = 0; } catch (e) {}
+    var p = leadAudio.play();
+    if (p && p.catch) p.catch(function () {});
+    lockScreenOn();
+    cancelAnimationFrame(raf);
+    render();
+  }
+  function cancelLeadIn() {
+    leadAudio.pause();
+    state = 'paused';
+    cancelAnimationFrame(raf);
+    lockScreenOff();
+    render();
+  }
+
+  function toggle() {
+    if (!sheet.hidden) return;
     if (state === 'idle' || state === 'done') {
       try { audio.currentTime = 0; } catch (e) {}
       play();
     } else if (state === 'running') {
-      audio.pause();
-      state = 'paused';
-      cancelAnimationFrame(raf);
-      lockScreenOff();
-      render();
+      pause();
     } else if (state === 'paused') {
-      play();
+      startLeadIn();
+    } else if (state === 'leadin') {
+      cancelLeadIn();
     }
-  });
+  }
 
-  resetBtn.addEventListener('click', function () {
+  function toIdle() {
     audio.pause();
+    leadAudio.pause();
     try { audio.currentTime = 0; } catch (e) {}
     cancelAnimationFrame(raf);
     lockScreenOff();
     state = 'idle';
     render();
+  }
+
+  goBtn.addEventListener('click', toggle);
+  resetBtn.addEventListener('click', toIdle);
+
+  // Tap anywhere to pause or resume: the rope is in your hands and the button is
+  // a small target. Buttons and the settings sheet keep their own behaviour.
+  document.addEventListener('click', function (e) {
+    if (state === 'idle' || state === 'done') return;
+    if (e.target.closest && e.target.closest('button, .sheet')) return;
+    toggle();
   });
 
   audio.addEventListener('ended', function () {
@@ -432,18 +712,86 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   });
 
   document.addEventListener('keydown', function (e) {
-    if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); goBtn.click(); }
+    if (e.key === 'Escape' && !sheet.hidden) { closeSheet(); return; }
+    if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); toggle(); }
   });
 
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'visible' && state === 'running') {
+    if (document.visibilityState === 'visible' && (state === 'running' || state === 'leadin')) {
       lockScreenOn();
       cancelAnimationFrame(raf);
       render();
     }
   });
 
+  // ---- Presets
+
+  PRESETS.forEach(function (p) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = p.label;
+    b.addEventListener('click', function () {
+      for (var k in p.cfg) cfg[k] = p.cfg[k];
+      saveCfg();
+      build();
+      if (state !== 'idle') toIdle(); else render();
+      syncSheet();
+    });
+    p.el = b;
+    presetsEl.appendChild(b);
+  });
+  function syncPresets() {
+    PRESETS.forEach(function (p) {
+      var same = true;
+      for (var k in p.cfg) { if (cfg[k] !== p.cfg[k]) same = false; }
+      p.el.setAttribute('aria-pressed', same ? 'true' : 'false');
+    });
+  }
+
+  // ---- Settings sheet
+
+  function syncSheet() {
+    $('v-rounds').textContent = cfg.rounds;
+    $('v-opener').textContent = cfg.opener + ' s';
+    $('v-work').textContent = cfg.work + ' s';
+    $('v-rest').textContent = cfg.rest + ' s';
+    totalEl.textContent = 'Total ' + fmt(WORKOUT);
+    Array.prototype.forEach.call(sheet.querySelectorAll('.step button'), function (b) {
+      var k = b.dataset.k, d = Number(b.dataset.d), L = LIMITS[k];
+      b.disabled = d < 0 ? cfg[k] <= L[0] : cfg[k] >= L[1];
+    });
+    syncPresets();
+  }
+  function openSheet() {
+    if (state !== 'idle') toIdle();
+    sheet.hidden = false;
+    syncSheet();
+    $('sdone').focus();
+  }
+  function closeSheet() {
+    sheet.hidden = true;
+    gearBtn.focus();
+  }
+  gearBtn.addEventListener('click', openSheet);
+  $('sdone').addEventListener('click', closeSheet);
+  $('sreset').addEventListener('click', function () {
+    for (var k in DEFAULTS) cfg[k] = DEFAULTS[k];
+    saveCfg(); build(); render(); syncSheet();
+  });
+  sheet.addEventListener('click', function (e) {
+    if (e.target === sheet) closeSheet();
+  });
+  Array.prototype.forEach.call(sheet.querySelectorAll('.step button'), function (b) {
+    b.addEventListener('click', function () {
+      var k = b.dataset.k, L = LIMITS[k];
+      cfg[k] = clampVal(k, cfg[k] + Number(b.dataset.d) * L[2]);
+      saveCfg(); build(); render(); syncSheet();
+    });
+  });
+
+  build();
   render();
+  syncSheet();
 
   if ('serviceWorker' in navigator) {
     try { navigator.serviceWorker.register('sw.js').catch(function () {}); } catch (e) {}
