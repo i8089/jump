@@ -399,7 +399,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   var LEAD = 3;
   var DEFAULTS = { rounds: 5, opener: 60, work: 45, rest: 15, sound: 'mix' };
   var SOUND_NOTE = {
-    mix: 'Cues play over your music. The ring switch can silence them.',
+    mix: 'Cues play over your music, and sound with the ring switch off.',
     solo: 'Cues stop your music while the workout runs, and play on silent.'
   };
   // key: [min, max, step]
@@ -505,17 +505,26 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   function rising(buf, at) { tone(buf, at, 880, 0.14, 0.5); tone(buf, at + 0.16, 1320, 0.45, 0.5); }
   function falling(buf, at) { tone(buf, at, 660, 0.14, 0.5); tone(buf, at + 0.16, 330, 0.5, 0.5); }
 
-  // Newer iOS Safari: who owns the speaker. 'playback' is an exclusive session,
-  // so iOS pauses Music for as long as ours runs; 'ambient' mixes with it but
-  // lets the ring switch silence us. Fixed when the AudioContext is made.
+  // Newer iOS Safari: who owns the speaker, fixed when the AudioContext is made.
+  // 'playback' is an exclusive session, so iOS pauses Music for as long as ours
+  // runs. 'transient' is the notification lane: it plays on top of other audio
+  // and, unlike 'ambient', is meant to be heard with the ring switch off. We ask
+  // for it and fall back to 'ambient' where it isn't recognised.
   function applySound() {
     try {
-      if (navigator.audioSession) navigator.audioSession.type = cfg.sound === 'solo' ? 'playback' : 'ambient';
-    } catch (e) {}
+      var a = navigator.audioSession;
+      if (!a) return;
+      if (cfg.sound === 'solo') { a.type = 'playback'; return; }
+      a.type = 'transient';
+      if (a.type !== 'transient') a.type = 'ambient';
+    } catch (e) {
+      try { navigator.audioSession.type = 'ambient'; } catch (e2) {}
+    }
   }
 
   var AC = window.AudioContext || window.webkitAudioContext;
-  var ctx = null, mainBuf = null, leadBuf = null, src = null, leadSrc = null;
+  var ctx = null, mainBuf = null, leadBuf = null, srcs = [], leadSrc = null;
+  var cueSpans = [], endTimer = 0;
   var pos = 0, base = 0;     // session position while stopped / clock offset while playing
   var pending = null;        // samples waiting for the context to exist
 
@@ -537,12 +546,13 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     if (pending) { mainBuf = toBuffer(pending); pending = null; }
   }
   function dropCtx() {
-    stopSrc(src); stopSrc(leadSrc); src = leadSrc = null;
+    stopAll(); stopSrc(leadSrc); leadSrc = null;
     if (ctx) { try { ctx.close(); } catch (e) {} }
     ctx = null; mainBuf = null; leadBuf = null;
     audioDirty = true;
   }
   function stopSrc(n) { if (n) { n.onended = null; try { n.stop(); } catch (e) {} } }
+  function stopAll() { srcs.forEach(stopSrc); srcs = []; clearTimeout(endTimer); endTimer = 0; }
   function now() { return state === 'running' && ctx ? Math.min(END, ctx.currentTime - base) : pos; }
 
   // Rendering a ten-minute session is tens of megabytes, so it happens once per
@@ -570,6 +580,26 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
       }
     });
     pending = samples;
+    cueSpans = findSpans(samples);
+  }
+
+  // Only the cues are sound; the rest of the track is silence. Playing the gaps
+  // would hold the audio session open for the whole workout, which is what made
+  // iOS duck or stop the music from end to end. So find the runs that carry
+  // signal, pad them, and play those spans alone off the same buffer.
+  function findSpans(s) {
+    var out = [], inRun = false, st = 0, last = 0, gap = 0.25 * RATE, pad = 0.05;
+    for (var i = 0; i < s.length; i++) {
+      if (s[i] !== 0) {
+        if (!inRun) { inRun = true; st = i; }
+        last = i;
+      } else if (inRun && i - last > gap) {
+        out.push({ s: Math.max(0, st / RATE - pad), e: last / RATE + pad });
+        inRun = false;
+      }
+    }
+    if (inRun) out.push({ s: Math.max(0, st / RATE - pad), e: last / RATE + pad });
+    return out;
   }
 
   var state = 'idle', raf = 0, wake = null, leadStart = 0;
@@ -679,6 +709,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   }
 
   function finish() {
+    clearTimeout(endTimer); endTimer = 0;
     state = 'done';
     cancelAnimationFrame(raf);
     lockScreenOff();
@@ -688,16 +719,22 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     ensureAudio();
     ensureCtx();
     stopSrc(leadSrc); leadSrc = null;
-    stopSrc(src);
-    src = ctx.createBufferSource();
-    src.buffer = mainBuf;
-    src.connect(ctx.destination);
-    var me = src;
-    src.onended = function () {
-      if (src === me && state === 'running') { finish(); render(); }
-    };
-    src.start(0, Math.min(pos, mainBuf.duration));
+    stopAll();
     base = ctx.currentTime - pos;
+    cueSpans.forEach(function (sp) {
+      if (sp.e <= pos) return;
+      var from = Math.max(sp.s, pos), len = Math.min(sp.e, mainBuf.duration) - from;
+      if (len <= 0) return;
+      var n = ctx.createBufferSource();
+      n.buffer = mainBuf;
+      n.connect(ctx.destination);
+      n.start(base + from, from, len);
+      srcs.push(n);
+    });
+    // The track no longer runs end to end, so nothing fires at the finish line.
+    endTimer = setTimeout(function () {
+      if (state === 'running') { finish(); render(); }
+    }, Math.max(0, END - pos) * 1000 + 200);
     state = 'running';
     lockScreenOn();
     cancelAnimationFrame(raf);
@@ -706,7 +743,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
   function pause() {
     pos = now();
-    stopSrc(src); src = null;
+    stopAll();
     state = 'paused';
     cancelAnimationFrame(raf);
     lockScreenOff();
@@ -751,7 +788,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   }
 
   function toIdle() {
-    stopSrc(src); src = null;
+    stopAll();
     stopSrc(leadSrc); leadSrc = null;
     pos = 0;
     cancelAnimationFrame(raf);
