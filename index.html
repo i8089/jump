@@ -289,6 +289,12 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   color: #f2eee6;
 }
 .seg2 button[aria-pressed="true"] { background: #f2eee6; color: #15181d; }
+.tbtn {
+  font: inherit; color: #f2eee6; background: none; cursor: pointer;
+  border: 1px solid rgba(242, 238, 230, 0.4); border-radius: 999px;
+  padding: 7px 16px; min-height: 36px;
+}
+.tbtn:active { background: rgba(242, 238, 230, 0.14); }
 .note {
   padding: 10px 0 0;
   color: rgba(242, 238, 230, .62);
@@ -386,6 +392,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
       </span>
     </div>
     <p class="note" id="soundnote"></p>
+    <p class="note"><button id="stest" class="tbtn" type="button">Play a cue</button></p>
     <p class="total" id="total">Total 5:00</p>
     <div class="sheetfoot">
       <button id="sreset" type="button">Default</button>
@@ -399,8 +406,8 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   var LEAD = 3;
   var DEFAULTS = { rounds: 5, opener: 60, work: 45, rest: 15, sound: 'mix' };
   var SOUND_NOTE = {
-    mix: 'Cues play over your music, and sound with the ring switch off.',
-    solo: 'Cues stop your music while the workout runs, and play on silent.'
+    mix: 'Your music keeps playing. Needs the ring switch on, or you hear nothing.',
+    solo: 'Cues always sound, ring switch or not, but your music stops while you jump.'
   };
   // key: [min, max, step]
   var LIMITS = { rounds: [1, 20, 1], opener: [10, 180, 5], work: [10, 180, 5], rest: [5, 120, 5] };
@@ -524,7 +531,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
   var AC = window.AudioContext || window.webkitAudioContext;
   var ctx = null, mainBuf = null, leadBuf = null, srcs = [], leadSrc = null;
-  var cueSpans = [], endTimer = 0;
+  var cueSpans = [], endTimer = 0, testBuf = null;
   var pos = 0, base = 0;     // session position while stopped / clock offset while playing
   var pending = null;        // samples waiting for the context to exist
 
@@ -541,6 +548,10 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
       var s = new Float32Array(Math.ceil(3.3 * RATE));
       ticks(s, LEAD, 660, 0.35);
       leadBuf = toBuffer(s);
+      var t = new Float32Array(Math.ceil(1.1 * RATE));
+      tone(t, 0, 440, 0.09, 0.3);
+      rising(t, 0.3);
+      testBuf = toBuffer(t);
     }
     if (ctx.state !== 'running') { var r = ctx.resume(); if (r && r.catch) r.catch(function () {}); }
     if (pending) { mainBuf = toBuffer(pending); pending = null; }
@@ -548,7 +559,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   function dropCtx() {
     stopAll(); stopSrc(leadSrc); leadSrc = null;
     if (ctx) { try { ctx.close(); } catch (e) {} }
-    ctx = null; mainBuf = null; leadBuf = null;
+    ctx = null; mainBuf = null; leadBuf = null; testBuf = null;
     audioDirty = true;
   }
   function stopSrc(n) { if (n) { n.onended = null; try { n.stop(); } catch (e) {} } }
@@ -881,6 +892,15 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   });
   sheet.addEventListener('click', function (e) {
     if (e.target === sheet) closeSheet();
+  });
+  // Whether a mode is audible depends on the phone, not on anything we can
+  // read, so let it be tried in a tap instead of a whole workout.
+  $('stest').addEventListener('click', function () {
+    ensureCtx();
+    var n = ctx.createBufferSource();
+    n.buffer = testBuf;
+    n.connect(ctx.destination);
+    n.start();
   });
   Array.prototype.forEach.call(sheet.querySelectorAll('[data-sound]'), function (b) {
     b.addEventListener('click', function () {
