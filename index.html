@@ -275,6 +275,26 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   color: #f2eee6;
 }
 .step button:disabled { opacity: .35; cursor: default; }
+.seg2 { display: flex; gap: 8px; }
+.seg2 button {
+  min-height: 44px;
+  padding: 0 14px;
+  font-family: var(--font-body);
+  font-size: .95rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-transform: none;
+  border-radius: 12px;
+  background: rgba(242, 238, 230, .1);
+  color: #f2eee6;
+}
+.seg2 button[aria-pressed="true"] { background: #f2eee6; color: #15181d; }
+.note {
+  padding: 10px 0 0;
+  color: rgba(242, 238, 230, .62);
+  font-size: .9rem;
+  line-height: 1.45;
+}
 .total {
   padding: 14px 0 0;
   color: rgba(242, 238, 230, .62);
@@ -358,6 +378,14 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
         <button type="button" data-k="rest" data-d="1" aria-label="Longer rest">+</button>
       </span>
     </div>
+    <div class="row">
+      <span class="lab">Sound</span>
+      <span class="seg2">
+        <button type="button" data-sound="mix">Over music</button>
+        <button type="button" data-sound="solo">Take over</button>
+      </span>
+    </div>
+    <p class="note" id="soundnote"></p>
     <p class="total" id="total">Total 5:00</p>
     <div class="sheetfoot">
       <button id="sreset" type="button">Default</button>
@@ -369,7 +397,11 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 <script>
 (function () {
   var LEAD = 3;
-  var DEFAULTS = { rounds: 5, opener: 60, work: 45, rest: 15 };
+  var DEFAULTS = { rounds: 5, opener: 60, work: 45, rest: 15, sound: 'mix' };
+  var SOUND_NOTE = {
+    mix: 'Cues play over your music. The ring switch can silence them.',
+    solo: 'Cues stop your music while the workout runs, and play on silent.'
+  };
   // key: [min, max, step]
   var LIMITS = { rounds: [1, 20, 1], opener: [10, 180, 5], work: [10, 180, 5], rest: [5, 120, 5] };
   var PRESETS = [
@@ -382,7 +414,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   var body = document.body;
   var $ = function (id) { return document.getElementById(id); };
   var phaseEl = $('phase'), countEl = $('count'), hintEl = $('hint'),
-      roundEl = $('round'), elapsedEl = $('elapsed'), leftEl = $('left'),
+      roundEl = $('round'), elapsedEl = $('elapsed'), leftEl = $('left'), soundNote = $('soundnote'),
       goBtn = $('go'), resetBtn = $('reset'), roundsEl = $('rounds'),
       gearBtn = $('gear'), presetsEl = $('presets'), sheet = $('sheet'),
       totalEl = $('total');
@@ -396,12 +428,15 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     return Math.min(L[1], Math.max(L[0], n));
   }
   function loadCfg() {
-    var out = { rounds: DEFAULTS.rounds, opener: DEFAULTS.opener, work: DEFAULTS.work, rest: DEFAULTS.rest };
+    var out = { rounds: DEFAULTS.rounds, opener: DEFAULTS.opener, work: DEFAULTS.work, rest: DEFAULTS.rest, sound: DEFAULTS.sound };
     try {
       var raw = localStorage.getItem(STORE);
       if (raw) {
         var o = JSON.parse(raw);
-        for (var k in out) { if (o && o[k] != null) out[k] = clampVal(k, o[k]); }
+        for (var k in out) {
+          if (!o || o[k] == null) continue;
+          out[k] = k === 'sound' ? (o[k] === 'solo' ? 'solo' : 'mix') : clampVal(k, o[k]);
+        }
       }
     } catch (e) {}
     return out;
@@ -470,9 +505,14 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   function rising(buf, at) { tone(buf, at, 880, 0.14, 0.5); tone(buf, at + 0.16, 1320, 0.45, 0.5); }
   function falling(buf, at) { tone(buf, at, 660, 0.14, 0.5); tone(buf, at + 0.16, 330, 0.5, 0.5); }
 
-  // Newer iOS Safari: play as media, so the silent switch doesn't mute the beeps.
-  // Set before the AudioContext is made.
-  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  // Newer iOS Safari: who owns the speaker. 'playback' is an exclusive session,
+  // so iOS pauses Music for as long as ours runs; 'ambient' mixes with it but
+  // lets the ring switch silence us. Fixed when the AudioContext is made.
+  function applySound() {
+    try {
+      if (navigator.audioSession) navigator.audioSession.type = cfg.sound === 'solo' ? 'playback' : 'ambient';
+    } catch (e) {}
+  }
 
   var AC = window.AudioContext || window.webkitAudioContext;
   var ctx = null, mainBuf = null, leadBuf = null, src = null, leadSrc = null;
@@ -487,6 +527,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   // Must run inside a tap: iOS only lets audio start from a user gesture.
   function ensureCtx() {
     if (!ctx) {
+      applySound();
       ctx = new AC();
       var s = new Float32Array(Math.ceil(3.3 * RATE));
       ticks(s, LEAD, 660, 0.35);
@@ -494,6 +535,12 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     }
     if (ctx.state !== 'running') { var r = ctx.resume(); if (r && r.catch) r.catch(function () {}); }
     if (pending) { mainBuf = toBuffer(pending); pending = null; }
+  }
+  function dropCtx() {
+    stopSrc(src); stopSrc(leadSrc); src = leadSrc = null;
+    if (ctx) { try { ctx.close(); } catch (e) {} }
+    ctx = null; mainBuf = null; leadBuf = null;
+    audioDirty = true;
   }
   function stopSrc(n) { if (n) { n.onended = null; try { n.stop(); } catch (e) {} } }
   function now() { return state === 'running' && ctx ? Math.min(END, ctx.currentTime - base) : pos; }
@@ -769,6 +816,10 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     $('v-work').textContent = cfg.work + ' s';
     $('v-rest').textContent = cfg.rest + ' s';
     totalEl.textContent = 'Total ' + fmt(WORKOUT);
+    soundNote.textContent = SOUND_NOTE[cfg.sound];
+    Array.prototype.forEach.call(sheet.querySelectorAll('[data-sound]'), function (b) {
+      b.setAttribute('aria-pressed', b.dataset.sound === cfg.sound ? 'true' : 'false');
+    });
     Array.prototype.forEach.call(sheet.querySelectorAll('.step button'), function (b) {
       var k = b.dataset.k, d = Number(b.dataset.d), L = LIMITS[k];
       b.disabled = d < 0 ? cfg[k] <= L[0] : cfg[k] >= L[1];
@@ -793,6 +844,12 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   });
   sheet.addEventListener('click', function (e) {
     if (e.target === sheet) closeSheet();
+  });
+  Array.prototype.forEach.call(sheet.querySelectorAll('[data-sound]'), function (b) {
+    b.addEventListener('click', function () {
+      cfg.sound = b.dataset.sound;
+      saveCfg(); dropCtx(); syncSheet();
+    });
   });
   Array.prototype.forEach.call(sheet.querySelectorAll('.step button'), function (b) {
     b.addEventListener('click', function () {
