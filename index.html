@@ -532,6 +532,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   var AC = window.AudioContext || window.webkitAudioContext;
   var ctx = null, mainBuf = null, leadBuf = null, srcs = [], leadSrc = null;
   var cueSpans = [], endTimer = 0, testBuf = null;
+  var seenT = -1, seenAt = 0;   // last clock reading, for spotting a stalled context
   var pos = 0, base = 0;     // session position while stopped / clock offset while playing
   var pending = null;        // samples waiting for the context to exist
 
@@ -545,6 +546,9 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     if (!ctx) {
       applySound();
       ctx = new AC();
+      ctx.onstatechange = function () {
+        if (document.visibilityState === 'visible') recoverCtx();
+      };
       var s = new Float32Array(Math.ceil(3.3 * RATE));
       ticks(s, LEAD, 660, 0.35);
       leadBuf = toBuffer(s);
@@ -562,6 +566,22 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     ctx = null; mainBuf = null; leadBuf = null; testBuf = null;
     audioDirty = true;
   }
+  // The countdown is the audio clock now, so a context that does not come back
+  // from an interruption is a frozen number under a screen that still says Jump
+  // (WebKit bug 263627). Ask for it back, and if it will not come, fall to
+  // paused at the position it stopped at, which a tap can pick up again.
+  function recoverCtx() {
+    if (!ctx || state !== 'running' || ctx.state === 'running') return;
+    var settle = function () {
+      if (state !== 'running') return;
+      if (ctx && ctx.state === 'running') { beat(); cancelAnimationFrame(raf); render(); }
+      else pause();
+    };
+    var r;
+    try { r = ctx.resume(); } catch (e) {}
+    if (r && r.then) r.then(settle, settle); else setTimeout(settle, 300);
+  }
+  function beat() { seenT = -1; seenAt = performance.now(); }
   function stopSrc(n) { if (n) { n.onended = null; try { n.stop(); } catch (e) {} } }
   function stopAll() { srcs.forEach(stopSrc); srcs = []; clearTimeout(endTimer); endTimer = 0; }
   function now() { return state === 'running' && ctx ? Math.min(END, ctx.currentTime - base) : pos; }
@@ -647,6 +667,13 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
   function render() {
     var t = state === 'idle' ? 0 : now();
+    // A context can report 'running' and still not advance. Two seconds of a
+    // motionless clock is the same failure, so treat it the same way.
+    if (state === 'running') {
+      var w = performance.now();
+      if (t !== seenT) { seenT = t; seenAt = w; }
+      else if (w - seenAt > 2000) { pause(); return; }
+    }
     if (state === 'running' && t >= END) finish();
 
     var cur = phases[phases.length - 1];
@@ -746,6 +773,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     endTimer = setTimeout(function () {
       if (state === 'running') { finish(); render(); }
     }, Math.max(0, END - pos) * 1000 + 200);
+    beat();
     state = 'running';
     lockScreenOn();
     cancelAnimationFrame(raf);
@@ -827,6 +855,8 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible' && (state === 'running' || state === 'leadin')) {
       lockScreenOn();
+      beat();                 // the loop was parked while hidden, not stalled
+      recoverCtx();
       cancelAnimationFrame(raf);
       render();
     }
