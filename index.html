@@ -455,7 +455,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
   // ---- Timeline, rebuilt whenever the settings change
 
-  var phases = [], END = 0, WORKOUT = 0, audioDirty = true;
+  var phases = [], END = 0, WORKOUT = 0;
 
   function build() {
     phases = [{ k: 'ready', d: LEAD, r: -1 }];
@@ -468,7 +468,6 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     END = acc;                 // includes lead-in
     WORKOUT = END - LEAD;
     buildBars();
-    audioDirty = true;         // the sound is re-rendered on the next Start
   }
 
   // Progress bar: one group per round, jump | rest
@@ -490,8 +489,8 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
     groups.forEach(function (g) { g.style.flex = g._w; });
   }
 
-  // ---- Sound. The whole session is rendered into one buffer and played through
-  // Web Audio. Unlike an <audio> element, this doesn't put a "Now Playing" media
+  // ---- Sound. Five short clips, scheduled on the audio clock from the phase
+  // list and played through Web Audio. Unlike an <audio> element, this doesn't put a "Now Playing" media
   // player on the iPhone lock screen, Control Center or Dynamic Island.
   var RATE = 16000;
 
@@ -530,11 +529,10 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   }
 
   var AC = window.AudioContext || window.webkitAudioContext;
-  var ctx = null, mainBuf = null, leadBuf = null, srcs = [], leadSrc = null;
-  var cueSpans = [], endTimer = 0, testBuf = null;
+  var ctx = null, clips = null, leadBuf = null, srcs = [], leadSrc = null;
+  var endTimer = 0, testBuf = null;
   var seenT = -1, seenAt = 0;   // last clock reading, for spotting a stalled context
   var pos = 0, base = 0;     // session position while stopped / clock offset while playing
-  var pending = null;        // samples waiting for the context to exist
 
   function toBuffer(f32) {
     var b = ctx.createBuffer(1, f32.length, RATE);
@@ -556,15 +554,14 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
       tone(t, 0, 440, 0.09, 0.3);
       rising(t, 0.3);
       testBuf = toBuffer(t);
+      clips = makeClips();
     }
     if (ctx.state !== 'running') { var r = ctx.resume(); if (r && r.catch) r.catch(function () {}); }
-    if (pending) { mainBuf = toBuffer(pending); pending = null; }
   }
   function dropCtx() {
     stopAll(); stopSrc(leadSrc); leadSrc = null;
     if (ctx) { try { ctx.close(); } catch (e) {} }
-    ctx = null; mainBuf = null; leadBuf = null; testBuf = null;
-    audioDirty = true;
+    ctx = null; clips = null; leadBuf = null; testBuf = null;
   }
   // The countdown is the audio clock now, so a context that does not come back
   // from an interruption is a frozen number under a screen that still says Jump
@@ -586,51 +583,42 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   function stopAll() { srcs.forEach(stopSrc); srcs = []; clearTimeout(endTimer); endTimer = 0; }
   function now() { return state === 'running' && ctx ? Math.min(END, ctx.currentTime - base) : pos; }
 
-  // Rendering a ten-minute session is tens of megabytes, so it happens once per
-  // Start rather than on every tap of a stepper.
-  function ensureAudio() {
-    if (!audioDirty) return;
-    audioDirty = false;
-    var samples = new Float32Array(Math.ceil((END + 2) * RATE));
+  // Each clip is one sound, rendered once per audio context. The workout is
+  // a list of (time, clip) pairs, so memory and Start time stay the same at
+  // three minutes or an hour, and the speaker is only busy while a cue sounds.
+  function clip(len, draw) {
+    var f = new Float32Array(Math.ceil(len * RATE));
+    draw(f);
+    return toBuffer(f);
+  }
+  function makeClips() {
+    return {
+      hi: clip(0.1, function (f) { tone(f, 0, 660, 0.09, 0.35); }),
+      lo: clip(0.1, function (f) { tone(f, 0, 440, 0.09, 0.3); }),
+      up: clip(0.62, function (f) { rising(f, 0); }),
+      down: clip(0.67, function (f) { falling(f, 0); }),
+      fin: clip(1.12, function (f) {
+        [523, 659, 784, 1047].forEach(function (hz, k) {
+          tone(f, k * 0.17, hz, k === 3 ? 0.6 : 0.15, 0.45);
+        });
+      })
+    };
+  }
+  function cueList() {
+    var out = [];
+    function count(e, c) { [3, 2, 1].forEach(function (n) { out.push({ at: e - n, c: c }); }); }
     phases.forEach(function (p, idx) {
-      if (p.k === 'ready') {
-        ticks(samples, p.e, 660, 0.35);
-      } else if (p.k === 'jump') {
-        rising(samples, p.s);
-        if (idx === phases.length - 1) {
-          ticks(samples, p.e, 440, 0.3);
-          [523, 659, 784, 1047].forEach(function (f, k) {
-            tone(samples, p.e + k * 0.17, f, k === 3 ? 0.6 : 0.15, 0.45);
-          });
-        } else {
-          ticks(samples, p.e, 440, 0.3);
-        }
+      if (p.k === 'ready') count(p.e, 'hi');
+      else if (p.k === 'jump') {
+        out.push({ at: p.s, c: 'up' });
+        count(p.e, 'lo');
+        if (idx === phases.length - 1) out.push({ at: p.e, c: 'fin' });
       } else if (p.k === 'rest') {
-        falling(samples, p.s);
-        ticks(samples, p.e, 660, 0.35);
+        out.push({ at: p.s, c: 'down' });
+        count(p.e, 'hi');
       }
     });
-    pending = samples;
-    cueSpans = findSpans(samples);
-  }
-
-  // Only the cues are sound; the rest of the track is silence. Playing the gaps
-  // would hold the audio session open for the whole workout, which is what made
-  // iOS duck or stop the music from end to end. So find the runs that carry
-  // signal, pad them, and play those spans alone off the same buffer.
-  function findSpans(s) {
-    var out = [], inRun = false, st = 0, last = 0, gap = 0.25 * RATE, pad = 0.05;
-    for (var i = 0; i < s.length; i++) {
-      if (s[i] !== 0) {
-        if (!inRun) { inRun = true; st = i; }
-        last = i;
-      } else if (inRun && i - last > gap) {
-        out.push({ s: Math.max(0, st / RATE - pad), e: last / RATE + pad });
-        inRun = false;
-      }
-    }
-    if (inRun) out.push({ s: Math.max(0, st / RATE - pad), e: last / RATE + pad });
-    return out;
+    return out.sort(function (a, b) { return a.at - b.at; });
   }
 
   var state = 'idle', raf = 0, wake = null, leadStart = 0;
@@ -754,22 +742,20 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   }
 
   function play() {
-    ensureAudio();
     ensureCtx();
     stopSrc(leadSrc); leadSrc = null;
     stopAll();
     base = ctx.currentTime - pos;
-    cueSpans.forEach(function (sp) {
-      if (sp.e <= pos) return;
-      var from = Math.max(sp.s, pos), len = Math.min(sp.e, mainBuf.duration) - from;
-      if (len <= 0) return;
+    // A cue that began before the paused position is skipped, not replayed.
+    cueList().forEach(function (q) {
+      if (q.at < pos) return;
       var n = ctx.createBufferSource();
-      n.buffer = mainBuf;
+      n.buffer = clips[q.c];
       n.connect(ctx.destination);
-      n.start(base + from, from, len);
+      n.start(base + q.at);
       srcs.push(n);
     });
-    // The track no longer runs end to end, so nothing fires at the finish line.
+    // No sound runs to the finish line, so a timer marks it.
     endTimer = setTimeout(function () {
       if (state === 'running') { finish(); render(); }
     }, Math.max(0, END - pos) * 1000 + 200);
