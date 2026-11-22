@@ -512,20 +512,13 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
   function falling(buf, at) { tone(buf, at, 660, 0.14, 0.5); tone(buf, at + 0.16, 330, 0.5, 0.5); }
 
   // Newer iOS Safari: who owns the speaker, fixed when the AudioContext is made.
-  // 'playback' is an exclusive session, so iOS pauses Music for as long as ours
-  // runs. 'transient' is the notification lane: it plays on top of other audio
-  // and, unlike 'ambient', is meant to be heard with the ring switch off. We ask
-  // for it and fall back to 'ambient' where it isn't recognised.
+  // 'playback' is exclusive, so Music pauses while we run, but it ignores the
+  // ring switch. 'ambient' mixes with Music, and the ring switch silences it.
+  // No type does both ('transient' was tried and behaved like 'ambient').
   function applySound() {
     try {
-      var a = navigator.audioSession;
-      if (!a) return;
-      if (cfg.sound === 'solo') { a.type = 'playback'; return; }
-      a.type = 'transient';
-      if (a.type !== 'transient') a.type = 'ambient';
-    } catch (e) {
-      try { navigator.audioSession.type = 'ambient'; } catch (e2) {}
-    }
+      if (navigator.audioSession) navigator.audioSession.type = cfg.sound === 'solo' ? 'playback' : 'ambient';
+    } catch (e) {}
   }
 
   var AC = window.AudioContext || window.webkitAudioContext;
